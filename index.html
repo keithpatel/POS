@@ -233,7 +233,7 @@
 
         <section id="manualEntrySection" class="hidden">
             <h2>3. Manual UPC Entry</h2>
-            <input type="text" id="manualUpcInput" placeholder="Enter UPC">
+            <input type="text" id="manualUpcInput" placeholder="Enter UPC (fuzzy search supported)">
             <button id="manualSearchButton">Search UPC</button>
         </section>
 
@@ -469,25 +469,122 @@
                 manualEntrySection.classList.remove('hidden');
             }
 
-            function onScanSuccess(decodedText, decodedResult) {
-                console.log(`Scan successful: ${decodedText}`, decodedResult);
-                checkUpc(decodedText);
-                 // Optional: uncomment to stop scanning after one successful scan
-                // if (html5QrCode && html5QrCode.isScanning) {
-                //     stopScanner(); 
-                // }
+            // --- Levenshtein Distance Function ---
+            function levenshteinDistance(a, b) {
+                if (a.length === 0) return b.length;
+                if (b.length === 0) return a.length;
+
+                const matrix = [];
+
+                for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
+                for (let j = 0; j <= a.length; j++) { matrix[0][j] = j; }
+
+                for (let i = 1; i <= b.length; i++) {
+                    for (let j = 1; j <= a.length; j++) {
+                        if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                            matrix[i][j] = matrix[i - 1][j - 1];
+                        } else {
+                            matrix[i][j] = Math.min(
+                                matrix[i - 1][j - 1] + 1, // substitution
+                                matrix[i][j - 1] + 1,     // insertion
+                                matrix[i - 1][j] + 1      // deletion
+                            );
+                        }
+                    }
+                }
+                return matrix[b.length][a.length];
             }
 
-            function onScanFailure(error) {
-                // This callback is called frequently, so keep console logs minimal or conditional
-                // console.warn(`Scan error: ${error}`);
+            // --- UPC Lookup and Display Logic ---
+            function findExactItemByUpc(upcToSearch) {
+                const originalUpcForLog = String(upcToSearch).trim();
+                const upcToFind = String(upcToSearch).trim();
+                let normalizedQueryUpc = upcToFind;
+                if (/^\d+$/.test(upcToFind)) {
+                    normalizedQueryUpc = String(parseInt(upcToFind, 10));
+                }
+                console.log(`findExactItemByUpc: Original: "${originalUpcForLog}", Normalized Query: "${normalizedQueryUpc}"`);
+
+                const foundItem = posData.find(item => {
+                    const storedUpc = String(item.upc || "").trim();
+                    let normalizedStoredUpc = storedUpc;
+                    if (/^\d+$/.test(storedUpc)) {
+                        normalizedStoredUpc = String(parseInt(storedUpc, 10));
+                    }
+                    return normalizedStoredUpc === normalizedQueryUpc;
+                });
+                return foundItem || null;
             }
+
+            function processAndDisplayResult(item, originalInputUpc, matchType = 'Exact', distance = -1) {
+                let logEntry;
+
+                if (posData.length === 0 && matchType !== 'NoDataError') { // Ensure NoDataError skips this
+                     itemResultDiv.textContent = 'POS data not loaded. Please upload PDF first.';
+                     itemResultDiv.className = 'not-found';
+                     // No log entry here, as it's a prerequisite issue
+                     manualUpcInput.value = '';
+                     manualUpcInput.focus();
+                     return;
+                }
+                
+                if (matchType === 'NoDataError'){
+                     itemResultDiv.textContent = 'POS data not loaded. Please upload PDF first.';
+                     itemResultDiv.className = 'not-found';
+                     logEntry = { timestamp: new Date(), upc: originalInputUpc, status: 'Error: No POS Data', name: '-', price: null };
+                } else if (item) {
+                    let prefix = matchType === 'Exact' ? '✅ Item Found' : '❓ Fuzzy Match';
+                    itemResultDiv.innerHTML = `${prefix}: <strong>${item.name}</strong> (UPC: ${item.upc}, Price: ${item.price !== null && item.price !== undefined ? '$' + parseFloat(item.price).toFixed(2) : 'N/A'})`;
+                    if (matchType === 'Fuzzy') {
+                        itemResultDiv.innerHTML += `<br><small>You entered: "${originalInputUpc}", Edit distance: ${distance}</small>`;
+                    }
+                    itemResultDiv.className = 'found'; 
+                    logEntry = {
+                        timestamp: new Date(),
+                        upc: originalInputUpc,
+                        status: matchType === 'Exact' ? 'Found' : `Fuzzy Match (Suggests: ${item.upc}, Dist: ${distance})`,
+                        name: item.name,
+                        price: item.price
+                    };
+                } else { // No item found (matchType 'NotFound' or 'FuzzyNotFound')
+                    itemResultDiv.textContent = `❌ UPC "${originalInputUpc}" not in POS list.`;
+                    if (matchType === 'FuzzyNotFound') {
+                        itemResultDiv.textContent += ` No close matches found.`;
+                    }
+                    itemResultDiv.className = 'not-found';
+                    logEntry = {
+                        timestamp: new Date(),
+                        upc: originalInputUpc,
+                        status: 'Not Found', // Keep log simple for "Not Found"
+                        name: '-',
+                        price: null
+                    };
+                }
+                addLogEntry(logEntry);
+                manualUpcInput.value = '';
+                manualUpcInput.focus();
+            }
+
+
+            // --- Event Handlers ---
+            function onScanSuccess(decodedText, decodedResult) {
+                console.log(`Scan successful: ${decodedText}`, decodedResult);
+                const originalScannedUpc = String(decodedText).trim();
+
+                if (posData.length === 0) {
+                    processAndDisplayResult(null, originalScannedUpc, 'NoDataError');
+                    return;
+                }
+                const foundItem = findExactItemByUpc(originalScannedUpc);
+                processAndDisplayResult(foundItem, originalScannedUpc, foundItem ? 'Exact' : 'NotFound');
+            }
+
+            function onScanFailure(error) { /* console.warn(`Scan error: ${error}`); */ }
 
             startScanButton.addEventListener('click', () => {
                 if (!html5QrCode) {
-                    try {
-                        html5QrCode = new Html5Qrcode("qr-reader" /*, { verbose: true } */); // verbose for more logs from lib
-                    } catch (e) {
+                    try { html5QrCode = new Html5Qrcode("qr-reader"); } 
+                    catch (e) {
                         console.error("Error initializing Html5Qrcode:", e);
                         itemResultDiv.textContent = `Error initializing scanner: ${e.message}. Try reloading.`;
                         itemResultDiv.className = 'not-found';
@@ -496,47 +593,26 @@
                 }
                 
                 const qrboxFunction = (viewfinderWidth, viewfinderHeight) => {
-                    // Aim for a rectangular box, wider than tall, common for UPCs
-                    let boxWidth = Math.floor(viewfinderWidth * 0.85); // Use 85% of viewfinder width
-                    let boxHeight = Math.floor(boxWidth * 0.45);    // Aspect ratio around 2.2:1 (width:height)
-                    
-                    // Ensure the box height isn't too large for the viewfinder
+                    let boxWidth = Math.floor(viewfinderWidth * 0.85); 
+                    let boxHeight = Math.floor(boxWidth * 0.45);    
                     if (boxHeight > viewfinderHeight * 0.7) {
                         boxHeight = Math.floor(viewfinderHeight * 0.7);
-                        // Optionally recalculate width based on this new height to maintain aspect ratio,
-                        // but ensure it doesn't exceed viewfinder width
                         boxWidth = Math.min(Math.floor(boxHeight * 2.2), Math.floor(viewfinderWidth * 0.95));
                     }
-                     // Ensure box width is not too large
-                    if (boxWidth > viewfinderWidth * 0.95) {
-                        boxWidth = Math.floor(viewfinderWidth * 0.95);
-                    }
-
-
+                    if (boxWidth > viewfinderWidth * 0.95) { boxWidth = Math.floor(viewfinderWidth * 0.95); }
                     console.log(`Calculated qrbox: width=${boxWidth}, height=${boxHeight}`);
-                    return {
-                        width: boxWidth,
-                        height: boxHeight
-                    };
+                    return { width: boxWidth, height: boxHeight };
                 };
 
                 const config = { 
-                    fps: 15, // Increased FPS from 10
+                    fps: 15, 
                     qrbox: qrboxFunction,
-                    // aspectRatio: 1.777778, // Suggest 16:9 for camera stream, often a good default
-                    experimentalFeatures: {
-                        useBarCodeDetectorIfSupported: true // Enable if browser supports native BarcodeDetector
-                    },
-                    rememberLastUsedCamera: true, // Good UX
-                    supportedScanTypes: [ // Focus on specific barcode types
-                        Html5QrcodeScanType.SCAN_TYPE_UPC_A,
-                        Html5QrcodeScanType.SCAN_TYPE_UPC_E,
-                        Html5QrcodeScanType.SCAN_TYPE_EAN_13,
-                        Html5QrcodeScanType.SCAN_TYPE_EAN_8
-                        // Add other types like Html5QrcodeScanType.SCAN_TYPE_CODE_128 if needed
+                    experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+                    rememberLastUsedCamera: true, 
+                    supportedScanTypes: [ 
+                        Html5QrcodeScanType.SCAN_TYPE_UPC_A, Html5QrcodeScanType.SCAN_TYPE_UPC_E,
+                        Html5QrcodeScanType.SCAN_TYPE_EAN_13, Html5QrcodeScanType.SCAN_TYPE_EAN_8
                     ],
-                    // Optional: You can try formats to improve performance if you know the exact formats.
-                    // formatsToSupport: [ Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.EAN_13 ],
                 };
                 
                 scanInstruction.textContent = "Point camera at barcode. Keep steady for best results.";
@@ -544,22 +620,12 @@
                 startScanButton.disabled = true;
                 stopScanButton.disabled = false;
 
-                html5QrCode.start(
-                    { facingMode: "environment" }, 
-                    config, 
-                    onScanSuccess, 
-                    onScanFailure
-                )
+                html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure)
                 .catch((err) => {
-                    console.warn("Environment camera failed or not found, trying any available camera:", err);
-                    html5QrCode.start(
-                        undefined,  // Let library decide the camera
-                        config, 
-                        onScanSuccess, 
-                        onScanFailure
-                    )
+                    console.warn("Environment camera failed, trying any camera:", err);
+                    html5QrCode.start(undefined, config, onScanSuccess, onScanFailure)
                     .catch((err2) => {
-                        itemResultDiv.textContent = `Camera access error: ${err2.message || err2}. Ensure permissions are granted and try reloading.`;
+                        itemResultDiv.textContent = `Camera access error: ${err2.message || err2}. Ensure permissions and try reloading.`;
                         itemResultDiv.className = 'not-found';
                         console.error("Failed to start scanner on fallback:", err2);
                         scanInstruction.classList.add('hidden');
@@ -594,12 +660,58 @@
             }
 
             manualSearchButton.addEventListener('click', () => {
-                const upc = manualUpcInput.value.trim();
-                if (upc) {
-                    checkUpc(upc);
-                } else {
+                const userInputUpc = manualUpcInput.value.trim();
+                if (!userInputUpc) {
                     itemResultDiv.textContent = 'Please enter a UPC.';
                     itemResultDiv.className = 'not-found';
+                    manualUpcInput.focus();
+                    return;
+                }
+
+                if (posData.length === 0) {
+                    processAndDisplayResult(null, userInputUpc, 'NoDataError');
+                    return;
+                }
+
+                const exactMatchItem = findExactItemByUpc(userInputUpc);
+
+                if (exactMatchItem) {
+                    processAndDisplayResult(exactMatchItem, userInputUpc, 'Exact');
+                } else {
+                    // No exact match, try fuzzy search
+                    console.log("Exact match failed for manual input, trying fuzzy search for:", userInputUpc);
+                    const FUZZY_THRESHOLD = 2; // Allow up to 2 edits (e.g., for typical 12-13 digit UPCs)
+                    let bestFuzzyMatch = null;
+                    let minDistance = Infinity;
+
+                    let normalizedInputUpc = userInputUpc; // Already trimmed by this point
+                    if (/^\d+$/.test(normalizedInputUpc)) {
+                        normalizedInputUpc = String(parseInt(normalizedInputUpc, 10));
+                    }
+
+                    posData.forEach(item => {
+                        const storedUpc = String(item.upc || "").trim();
+                        let normalizedStoredUpc = storedUpc;
+                        if (/^\d+$/.test(normalizedStoredUpc)) {
+                            normalizedStoredUpc = String(parseInt(normalizedStoredUpc, 10));
+                        }
+                        
+                        // Calculate Levenshtein distance using normalized versions
+                        const distance = levenshteinDistance(normalizedInputUpc, normalizedStoredUpc);
+
+                        if (distance < minDistance) {
+                            minDistance = distance;
+                            bestFuzzyMatch = item;
+                        }
+                    });
+
+                    if (bestFuzzyMatch && minDistance <= FUZZY_THRESHOLD && minDistance > 0) { 
+                        // minDistance > 0 ensures it's not an exact match we somehow missed
+                        processAndDisplayResult(bestFuzzyMatch, userInputUpc, 'Fuzzy', minDistance);
+                    } else {
+                        // No good fuzzy match found either
+                        processAndDisplayResult(null, userInputUpc, 'FuzzyNotFound');
+                    }
                 }
             });
             manualUpcInput.addEventListener('keypress', (event) => {
@@ -608,58 +720,8 @@
                 }
             });
 
-            function checkUpc(scannedUpcValue) {
-                const upcToFind = String(scannedUpcValue).trim();
-                let normalizedScannedUpc = upcToFind;
-                if (/^\d+$/.test(upcToFind)) { 
-                    normalizedScannedUpc = String(parseInt(upcToFind, 10));
-                }
 
-                console.log(`Checking UPC: Original scanned: "${scannedUpcValue}", Trimmed: "${upcToFind}", Normalized for comparison: "${normalizedScannedUpc}"`);
-
-                if (posData.length === 0) {
-                    itemResultDiv.textContent = 'POS data not loaded. Please upload PDF first.';
-                    itemResultDiv.className = 'not-found';
-                    return;
-                }
-                
-                const foundItem = posData.find(item => {
-                    const storedUpc = String(item.upc || "").trim(); 
-                    let normalizedStoredUpc = storedUpc;
-                    if (/^\d+$/.test(storedUpc)) { 
-                        normalizedStoredUpc = String(parseInt(storedUpc, 10));
-                    }
-                    return normalizedStoredUpc === normalizedScannedUpc;
-                });
-
-                let logEntry;
-
-                if (foundItem) {
-                    itemResultDiv.innerHTML = `✅ Item Found: <strong>${foundItem.name}</strong> (Price: ${foundItem.price !== null && foundItem.price !== undefined ? '$' + parseFloat(foundItem.price).toFixed(2) : 'N/A'})`;
-                    itemResultDiv.className = 'found';
-                    logEntry = {
-                        timestamp: new Date(),
-                        upc: scannedUpcValue, 
-                        status: 'Found',
-                        name: foundItem.name,
-                        price: foundItem.price
-                    };
-                } else {
-                    itemResultDiv.textContent = `❌ UPC "${scannedUpcValue}" not in POS list.`; 
-                    itemResultDiv.className = 'not-found';
-                    logEntry = {
-                        timestamp: new Date(),
-                        upc: scannedUpcValue, 
-                        status: 'Not Found',
-                        name: '-',
-                        price: null
-                    };
-                }
-                addLogEntry(logEntry);
-                manualUpcInput.value = ''; 
-                manualUpcInput.focus(); 
-            }
-
+            // --- Log Management ---
             function addLogEntry(entry) {
                 scanLog.unshift(entry); 
                 updateLogTable();
@@ -674,7 +736,7 @@
                     row.insertCell().textContent = entry.status;
                     const nameCell = row.insertCell();
                     nameCell.textContent = entry.name;
-                    if(entry.status === 'Found') nameCell.style.fontWeight = 'bold';
+                    if(entry.status.startsWith('Found') || entry.status.startsWith('Fuzzy Match')) nameCell.style.fontWeight = 'bold';
 
                     row.insertCell().textContent = entry.price !== null && entry.price !== undefined ? `$${parseFloat(entry.price).toFixed(2)}` : '-';
                 });
@@ -710,6 +772,7 @@
                 document.body.removeChild(link);
             });
 
+            // --- UI and State Management ---
             darkModeToggle.addEventListener('click', () => {
                 document.body.classList.toggle('dark-mode');
                 if (document.body.classList.contains('dark-mode')) {
