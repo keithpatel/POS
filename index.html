@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UPC Scanner POS Check vRegexIter1</title>
+
+    <!-- PDF.js via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js" defer></script>
+    <!-- ZXing via CDN -->
+    <script type="text/javascript" src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js" defer></script>
+
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; background-color: #f4f4f4; color: #333; transition: background-color 0.3s, color 0.3s; }
+        .container { max-width: 700px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); transition: background-color 0.3s; }
+        body.dark-mode { background-color: #333; color: #f4f4f4; }
+        body.dark-mode .container { background: #444; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        body.dark-mode button { background-color: #555; color: #fff; border: 1px solid #666; }
+        body.dark-mode button:hover { background-color: #666; }
+        body.dark-mode input[type="text"], body.dark-mode input[type="file"] { background-color: #555; color: #f0f0f0; border: 1px solid #666; }
+        header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
+        body.dark-mode header { border-bottom-color: #555; }
+        h1, h2 { color: #333; margin-top: 0; }
+        body.dark-mode h1, body.dark-mode h2 { color: #f0f0f0; }
+        section { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        body.dark-mode section { border-color: #5a5a5a; }
+        input[type="file"], input[type="text"] { display: block; margin-bottom: 10px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: calc(100% - 18px); }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; margin-right: 5px; margin-bottom: 5px; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        body.dark-mode button:disabled { background-color: #484848; border-color: #555; }
+        #pdfStatus, #libraryStatus { font-style: italic; margin-top: 10px; }
+        .error-message { color: red; font-weight: bold; }
+        .success-message { color: green; font-weight: bold; }
+        .warning-message { color: orange; }
+        .scanner-area { margin-bottom: 15px; text-align: center; }
+        #videoElement { background-color: #000; max-width: 100%; border: 1px solid #ccc; }
+        .scanner-controls button { margin-top: 10px; }
+        #scanResult { margin-top: 15px; padding: 10px; border: 1px dashed #ccc; border-radius: 4px; min-height: 50px; }
+        body.dark-mode #scanResult { border-color: #555; }
+        #scanResult .found { color: green; font-weight: bold; }
+        #scanResult .not-found { color: red; font-weight: bold; }
+        #scanResult .error { color: orange; font-weight: bold; }
+        #scanLogList { list-style-type: none; padding: 0; max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 10px; }
+        body.dark-mode #scanLogList { border-color: #555; }
+        #scanLogList li { padding: 5px 0; border-bottom: 1px dotted #f0f0f0; font-size: 0.85em; }
+        body.dark-mode #scanLogList li { border-bottom-color: #4c4c4c; }
+        #scanLogList li:last-child { border-bottom: none; }
+        .theme-switcher { display: flex; align-items: center; }
+        .theme-switcher label { margin-right: 5px; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏬 UPC Scanner POS Check (RegexIter1)</h1>
+            <div class="theme-switcher">
+                <label for="themeToggle">Dark Mode:</label>
+                <input type="checkbox" id="themeToggle">
+            </div>
+        </header>
+
+        <div id="libraryStatus" style="padding: 10px; margin-bottom:15px; border: 1px solid orange; border-radius: 5px;">
+            Checking library status...
+        </div>
+
+        <section id="pdf-upload-section">
+            <h2>1. Upload POS List (PDF)</h2>
+            <p style="font-size:0.9em;">Expected PDF row format: <br><code>UPC ProductNameSingleOrMultiWord DepartmentSingleWord PriceAtEnd</code><br>
+                Example: <code>12345678 COKE 20OZ CLASSIC BEVERAGE 1.99</code></p>
+            <input type="file" id="pdfFile" accept=".pdf">
+            <button id="processPdfButton">Process PDF</button>
+            <button id="clearPdfDataButton">Clear Stored POS Data</button>
+            <p id="pdfStatus"></p>
+        </section>
+
+        <section id="scanner-tool-section" style="display: none;">
+            <!-- ... same HTML ... -->
+            <h2>2. Scan or Enter UPC</h2>
+            <div class="scanner-area">
+                <video id="videoElement" playsinline style="width: 100%; max-width: 400px;"></video>
+                <div class="scanner-controls">
+                    <button id="startScanButton">📷 Start Camera Scan</button>
+                    <button id="stopScanButton" style="display: none;">🛑 Stop Camera</button>
+                </div>
+            </div>
+            <div class="manual-entry">
+                <input type="text" id="manualUpcInput" placeholder="Enter UPC manually">
+                <button id="checkManualUpcButton">Check Manual UPC</button>
+            </div>
+            <div id="scanResult"><p>Scan or enter a UPC to see results here.</p></div>
+        </section>
+
+        <section id="log-section" style="display: none;">
+            <!-- ... same HTML ... -->
+            <h2>3. Scan Log</h2>
+            <button id="exportLogButton">Export Log (CSV)</button>
+            <ul id="scanLogList"></ul>
+        </section>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const pdfFileEl = document.getElementById('pdfFile');
+            const processPdfButtonEl = document.getElementById('processPdfButton');
+            // ... other consts ...
+            const clearPdfDataButtonEl = document.getElementById('clearPdfDataButton');
+            const pdfStatusEl = document.getElementById('pdfStatus');
+            const libraryStatusEl = document.getElementById('libraryStatus');
+            const scannerToolSectionEl = document.getElementById('scanner-tool-section');
+            const logSectionEl = document.getElementById('log-section');
+            const videoElementEl = document.getElementById('videoElement');
+            const startScanButtonEl = document.getElementById('startScanButton');
+            const stopScanButtonEl = document.getElementById('stopScanButton');
+            const manualUpcInputEl = document.getElementById('manualUpcInput');
+            const checkManualUpcButtonEl = document.getElementById('checkManualUpcButton');
+            const scanResultEl = document.getElementById('scanResult');
+            const scanLogListEl = document.getElementById('scanLogList');
+            const exportLogButtonEl = document.getElementById('exportLogButton');
+            const themeToggleEl = document.getElementById('themeToggle');
+
+
+            let posData = []; 
+            let scanLog = [];
+            let zxingBrowserCodeReader = null;
+            let currentStream = null;
+            let pdfJsAvailable = false;
+            let zxingAvailable = false;
+
+            const POS_DATA_KEY = 'posListDataV_RegexIter1'; 
+            const SCAN_LOG_KEY = 'scanLogDataV_RegexIter1';
+            const THEME_KEY = 'appThemeV_RegexIter1';
+
+            function checkLibraries() { /* ... same as before ... */ 
+                let statusMessages = [];
+                if (typeof pdfjsLib !== 'undefined' && pdfjsLib.getDocument) { try { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js'; pdfJsAvailable = true; statusMessages.push('<span class="success-message">✅ pdf.js loaded.</span>'); } catch (e) { statusMessages.push(`<span class="error-message">❌ pdf.js worker config error: ${e.message}</span>`); } } else { statusMessages.push('<span class="error-message">❌ FATAL: pdf.js NOT LOADED.</span>');}
+                if (typeof ZXingBrowser !== 'undefined' && ZXingBrowser.BrowserMultiFormatReader) { zxingAvailable = true; statusMessages.push('<span class="success-message">✅ ZXing loaded.</span>'); } else { statusMessages.push('<span class="error-message">❌ FATAL: ZXing NOT LOADED.</span>'); }
+                libraryStatusEl.innerHTML = statusMessages.join('<br>'); processPdfButtonEl.disabled = !pdfJsAvailable; pdfFileEl.disabled = !pdfJsAvailable; if (!pdfJsAvailable) pdfStatusEl.innerHTML = '<strong class="error-message">PDF processing disabled.</strong>';
+            }
+            checkLibraries();
+
+            processPdfButtonEl.addEventListener('click', async () => { /* ... same file reading logic ... */ 
+                if (!pdfJsAvailable) { pdfStatusEl.textContent = 'PDF Library not loaded.'; pdfStatusEl.className = 'error-message'; return; }
+                if (!pdfFileEl.files || pdfFileEl.files.length === 0) { pdfStatusEl.textContent = 'Please select a PDF file.'; pdfStatusEl.className = 'error-message'; return; }
+                const file = pdfFileEl.files[0]; pdfStatusEl.textContent = 'Processing PDF...'; pdfStatusEl.className = 'warning-message';
+                try {
+                    const fileReader = new FileReader();
+                    fileReader.onload = async function() {
+                        const typedarray = new Uint8Array(this.result);
+                        try {
+                            const pdf = await pdfjsLib.getDocument({data: typedarray}).promise; let fullText = '';
+                            for (let i = 1; i <= pdf.numPages; i++) { const page = await pdf.getPage(i); const textContent = await page.getTextContent(); textContent.items.forEach(item => { fullText += item.str + (item.hasEOL ? '\n' : ' '); }); fullText += '\n';  }
+                            console.log("DEBUG: Full text extracted (first 2000 chars):\n", fullText.substring(0, 2000));
+                            parsePosDataFromText(fullText);
+                        } catch (pdfError) { console.error("DEBUG: Error parsing PDF content:", pdfError); pdfStatusEl.textContent = `Error parsing PDF: ${pdfError.message}`; pdfStatusEl.className = 'error-message'; }
+                    };
+                    fileReader.onerror = () => { console.error("DEBUG: FileReader error"); pdfStatusEl.textContent = 'Error reading PDF file.'; pdfStatusEl.className = 'error-message'; };
+                    fileReader.readAsArrayBuffer(file);
+                } catch (error) { console.error("DEBUG: Error processing PDF:", error); pdfStatusEl.textContent = `Error processing PDF: ${error.message}`; pdfStatusEl.className = 'error-message'; }
+            });
+
+            function parsePosDataFromText(text) {
+                posData = [];
+                // Regex Iteration 1: UPC <spaces> Name (greedy) <spaces> Department (single non-space block) <spaces> Price (digits/dots/commas, optionally followed by a single word, at the end)
+                const lineRegex = /^(\S+)\s+(.+)\s+(\S+)\s+([\d.,]+(?:\s+\S+)?)$/i;
+
+                let itemsFound = 0;
+                let problematicLines = 0;
+                let loggedProblemLines = 0; // To limit console spam
+                const maxProblemLinesToLog = 20;
+
+                console.log("DEBUG: Starting to parse lines with RegexIter1. Total lines:", text.split('\n').length);
+
+                text.split('\n').forEach((line, index) => {
+                    const trimmedLine = line.trim();
+                    if (trimmedLine.length < 10 || ['upc', 'product', 'department', 'price', 'item code', 'description'].some(h => trimmedLine.toLowerCase().startsWith(h))) {
+                        return; // Skip headers and very short lines
+                    }
+
+                    const match = trimmedLine.match(lineRegex);
+                    if (match && match.length === 5) { // UPC, Name, Department, PriceBlock
+                        const upc = match[1].trim();
+                        const name = match[2].trim(); // Greedy Name
+                        const department = match[3].trim(); // Single Word Department
+                        const priceBlock = match[4].trim(); // Price block (e.g., "1.99" or "1.99 USD")
+                        
+                        // Extract numeric price from priceBlock
+                        const priceMatch = priceBlock.match(/^[\d.,]+/);
+                        const price = priceMatch ? priceMatch[0].replace(',', '.') : '0.00'; // Default to 0.00 if no numeric part
+
+                        // Log specifically if it's the problematic UPC
+                        if (upc.includes('1235504')) { // CHANGE THIS TO YOUR DEBUG UPC if different
+                           console.log(`DEBUG (TARGET UPC with RegexIter1): Parsed line ${index + 1}: UPC='${upc}', Name='${name}', Dept='${department}', Price='${price}' (from PriceBlock='${priceBlock}') --- From: "${trimmedLine}"`);
+                        } else if (itemsFound < 5 && index < 50) { // Log first few successful parses for general check
+                           // console.log(`DEBUG (RegexIter1): Parsed line ${index + 1}: UPC='${upc}', Name='${name}', Dept='${department}', Price='${price}' --- From: "${trimmedLine}"`);
+                        }
+                        
+                        if (upc.length >= 1 && /^[A-Z0-9-]+$/.test(upc)) {
+                             posData.push({ upc, name, department, price });
+                            itemsFound++;
+                        } else { 
+                            problematicLines++; 
+                            if (loggedProblemLines < maxProblemLinesToLog) {
+                                console.warn(`DEBUG (RegexIter1): Invalid UPC on line ${index + 1}: '${upc}' from "${trimmedLine}"`);
+                                loggedProblemLines++;
+                            }
+                        }
+                    } else { 
+                        if (trimmedLine.length > 0) { // Only count non-empty lines as problematic
+                            problematicLines++;
+                            if (loggedProblemLines < maxProblemLinesToLog) {
+                                console.warn(`DEBUG (RegexIter1): No regex match line ${index + 1}: "${trimmedLine}"`);
+                                loggedProblemLines++;
+                            }
+                        }
+                    }
+                });
+
+                console.log("DEBUG (RegexIter1): PARSED POS DATA (first 5 of " + posData.length + "):", JSON.stringify(posData.slice(0,5), null, 2));
+                
+                if (itemsFound > 0) {
+                    localStorage.setItem(POS_DATA_KEY, JSON.stringify(posData));
+                    pdfStatusEl.textContent = `Processed ${itemsFound} items.`;
+                    if (problematicLines > 0) pdfStatusEl.textContent += ` (${problematicLines} lines unparsed). Review console.`;
+                    pdfStatusEl.className = 'success-message';
+                    showScannerTool();
+                } else {
+                    pdfStatusEl.textContent = `No valid items found. ${problematicLines} unparsable lines. Check PDF format and console for regex issues (RegexIter1).`;
+                    if (problematicLines > 0 && loggedProblemLines >= maxProblemLinesToLog) {
+                        pdfStatusEl.textContent += ` (Further unparsed line logs suppressed in console).`;
+                    }
+                    pdfStatusEl.className = 'error-message';
+                }
+            }
+
+            // --- clearPdfDataButtonEl, initScannerControls, startScanButtonEl, stopScanner, checkManualUpcButtonEl, checkUPC, addToScanLog, renderScanLog, exportLogButtonEl, showScannerTool, loadDataFromLocalStorage, themeToggleEl event listeners remain the same as the 'vDeptFix' version ---
+            // Ensure they use the correct posData structure: { upc, name, department, price }
+
+            clearPdfDataButtonEl.addEventListener('click', () => { if (confirm("Clear stored POS data?")) { localStorage.removeItem(POS_DATA_KEY); posData = []; pdfStatusEl.textContent = 'POS data cleared.'; pdfStatusEl.className = ''; scannerToolSectionEl.style.display = 'none'; logSectionEl.style.display = 'none'; scanLog = []; localStorage.removeItem(SCAN_LOG_KEY); renderScanLog(); pdfFileEl.value = ''; stopScanner();  } });
+            async function initScannerControls() { if (!zxingAvailable) { startScanButtonEl.disabled = true; scanResultEl.innerHTML = '<strong class="error-message">Camera scan disabled: ZXing N/A.</strong>'; return; } if (!zxingBrowserCodeReader) zxingBrowserCodeReader = new ZXingBrowser.BrowserMultiFormatReader(null, { delayBetweenScanAttempts: 200, delayBetweenScanSuccess: 500 }); try { const videoInputDevices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices(); startScanButtonEl.disabled = videoInputDevices.length === 0; if (videoInputDevices.length === 0) scanResultEl.innerHTML = '<p class="warning-message">No camera found.</p>'; } catch (err) { console.error("DEBUG: Error listing video devices:", err); startScanButtonEl.disabled = true; scanResultEl.innerHTML = `<p class="error-message">Camera init error: ${err.message}</p>`;} }
+            startScanButtonEl.addEventListener('click', async () => { if (!zxingAvailable || !zxingBrowserCodeReader) { scanResultEl.innerHTML = '<p class="error-message">Scanner not ready.</p>'; return; } scanResultEl.innerHTML = '<p class="warning-message">Starting camera...</p>'; startScanButtonEl.style.display = 'none'; stopScanButtonEl.style.display = 'inline-block'; manualUpcInputEl.disabled = true; checkManualUpcButtonEl.disabled = true; try { currentStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }); videoElementEl.srcObject = currentStream; await videoElementEl.play();  scanResultEl.innerHTML = '<p>Scanning... Point camera at a barcode.</p>'; zxingBrowserCodeReader.decodeFromStream(currentStream, videoElementEl, (result, err) => { if (result) { console.log("CAMERA SCAN SUCCESS:", result.getText()); if (navigator.vibrate) navigator.vibrate(100);  checkUPC(result.getText()); } if (err && !(err instanceof ZXingBrowser.NotFoundException) && !(err instanceof ZXingBrowser.ChecksumException) && !(err instanceof ZXingBrowser.FormatException) ) { console.error("CAMERA SCANNING ERROR:", err); } }); } catch (err) { console.error("DEBUG: Error starting camera stream:", err); scanResultEl.innerHTML = `<p class="error-message">⚠️ Camera Error: ${err.message}.</p>`; stopScanner(); } });
+            function stopScanner() { if (zxingBrowserCodeReader) zxingBrowserCodeReader.reset(); if (currentStream) { currentStream.getTracks().forEach(track => track.stop()); currentStream = null; } videoElementEl.srcObject = null; videoElementEl.pause(); videoElementEl.removeAttribute('src'); startScanButtonEl.style.display = 'inline-block'; stopScanButtonEl.style.display = 'none'; manualUpcInputEl.disabled = posData.length === 0; checkManualUpcButtonEl.disabled = posData.length === 0; if (scanResultEl.textContent.includes("Scanning...") || scanResultEl.textContent.includes("Starting camera...")) scanResultEl.innerHTML = '<p>Scanner stopped.</p>';}
+            checkManualUpcButtonEl.addEventListener('click', () => { const upc = manualUpcInputEl.value; if (upc) checkUPC(upc); else scanResultEl.innerHTML = '<p>Please enter a UPC.</p>'; manualUpcInputEl.value = ''; });
+            manualUpcInputEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') checkManualUpcButtonEl.click(); });
+            function checkUPC(upc) { if (posData.length === 0) { scanResultEl.innerHTML = '<p class="warning-message">POS data not loaded.</p>'; return; } const enteredUpcRaw = upc;  const cleanedEnteredUpc = enteredUpcRaw.trim(); console.log(`DEBUG: CHECKING UPC: Entered Raw='${enteredUpcRaw}', Trimmed='${cleanedEnteredUpc}'`); const foundItem = posData.find(item => { const storedUpc = item.upc; if (storedUpc === cleanedEnteredUpc) return true; const storedUpcNoLeadingZeros = storedUpc.replace(/^0+/, ''); const enteredUpcNoLeadingZeros = cleanedEnteredUpc.replace(/^0+/, ''); if (storedUpcNoLeadingZeros.length > 0 && storedUpcNoLeadingZeros === enteredUpcNoLeadingZeros) return true; return false; }); let logEntry; if (foundItem) { scanResultEl.innerHTML = `<p class="found">✅ Item Found!</p><p><strong>Matched On:</strong> ${cleanedEnteredUpc}</p><p><strong>Stored UPC:</strong> ${foundItem.upc}</p><p><strong>Name:</strong> ${foundItem.name}</p><p><strong>Department:</strong> ${foundItem.department || 'N/A'}</p><p><strong>Price:</strong> ${foundItem.price}</p>`; logEntry = { upc: cleanedEnteredUpc, status: "Found", name: foundItem.name, department: foundItem.department || '', price: foundItem.price, storedUpc: foundItem.upc, timestamp: new Date().toLocaleString()  }; } else { scanResultEl.innerHTML = `<p class="not-found">❌ Item with UPC "${cleanedEnteredUpc}" not in POS list.</p>`; logEntry = { upc: cleanedEnteredUpc, status: "Not Found", timestamp: new Date().toLocaleString() }; console.warn(`DEBUG: Item with UPC '${cleanedEnteredUpc}' was NOT FOUND after robust checks.`); } addToScanLog(logEntry); }
+            function addToScanLog(entry) { scanLog.unshift(entry); if (scanLog.length > 100) scanLog.pop(); renderScanLog(); localStorage.setItem(SCAN_LOG_KEY, JSON.stringify(scanLog)); }
+            function renderScanLog() { scanLogListEl.innerHTML = ''; scanLog.forEach(entry => { const li = document.createElement('li'); let text = `${entry.timestamp} - Matched: ${entry.upc} - <strong>${entry.status}</strong>`; if (entry.status === "Found") { text += ` (Stored: ${entry.storedUpc}, ${entry.name}, Dept: ${entry.department || 'N/A'}, Price: ${entry.price})`; } li.innerHTML = text;  li.className = entry.status === "Found" ? 'success-message' : 'error-message'; scanLogListEl.appendChild(li); }); }
+            exportLogButtonEl.addEventListener('click', () => { if (scanLog.length === 0) { alert("Log is empty."); return; } let csvContent = "Timestamp,MatchedUPC,StoredUPC,Status,ProductName,Department,Price\n"; scanLog.forEach(entry => { const productName = entry.name ? entry.name.replace(/"/g, '""') : ''; const department = entry.department ? entry.department.replace(/"/g, '""') : ''; const price = entry.price ? entry.price.replace(/"/g, '""') : ''; const storedUpc = entry.storedUpc ? entry.storedUpc.replace(/"/g, '""') : ''; csvContent += `"${entry.timestamp}","${entry.upc}","${storedUpc}","${entry.status}","${productName}","${department}","${price}"\n`; }); const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); const link = document.createElement("a"); const url = URL.createObjectURL(blob); link.setAttribute("href", url); link.setAttribute("download", `scan_log_${new Date().toISOString().slice(0,10)}.csv`); link.style.visibility = 'hidden'; document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); });
+            function showScannerTool() { const hasPosData = posData.length > 0; scannerToolSectionEl.style.display = hasPosData ? 'block' : 'none'; logSectionEl.style.display = hasPosData ? 'block' : 'none'; manualUpcInputEl.disabled = !hasPosData; checkManualUpcButtonEl.disabled = !hasPosData; if (hasPosData && zxingAvailable) initScannerControls(); else if (hasPosData && !zxingAvailable) { startScanButtonEl.disabled = true; scanResultEl.innerHTML = '<strong class="error-message">Camera scan disabled: ZXing N/A. Manual entry available.</strong>'; }}
+            function loadDataFromLocalStorage() { const storedPosData = localStorage.getItem(POS_DATA_KEY); if (storedPosData) { try { posData = JSON.parse(storedPosData); if (Array.isArray(posData) && posData.length > 0) { pdfStatusEl.textContent = `Loaded ${posData.length} items from storage.`; pdfStatusEl.className = 'success-message'; console.log("DEBUG: Loaded posData from localStorage (first 5 items):", JSON.stringify(posData.slice(0,5), null, 2)); showScannerTool(); } else { posData = []; } } catch(e) { console.error("DEBUG: Error parsing stored POS data:", e); localStorage.removeItem(POS_DATA_KEY); pdfStatusEl.textContent = 'Corrupted POS data. Re-upload PDF.'; pdfStatusEl.className = 'error-message';}} if(posData.length === 0 && pdfJsAvailable) { pdfStatusEl.textContent = 'No POS data found. Upload PDF.'; pdfStatusEl.className = '';} const storedScanLog = localStorage.getItem(SCAN_LOG_KEY); if (storedScanLog) { try { scanLog = JSON.parse(storedScanLog); if (!Array.isArray(scanLog)) scanLog = []; renderScanLog(); } catch(e) { console.error("DEBUG: Error parsing stored scan log:", e); localStorage.removeItem(SCAN_LOG_KEY); scanLog = []; } } const storedTheme = localStorage.getItem(THEME_KEY); if (storedTheme === 'dark') { document.body.classList.add('dark-mode'); themeToggleEl.checked = true; } }
+            themeToggleEl.addEventListener('change', () => { document.body.classList.toggle('dark-mode', themeToggleEl.checked); localStorage.setItem(THEME_KEY, themeToggleEl.checked ? 'dark' : 'light'); });
+            loadDataFromLocalStorage();
+        });
+    </script>
+</body>
+</html>
